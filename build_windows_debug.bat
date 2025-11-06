@@ -1,8 +1,9 @@
 @echo off
-REM Windows Build Script for CodeFree Desktop
+REM Windows Build Script for CodeFree Desktop (DEBUG VERSION)
+REM This version shows console output for debugging
 
 echo ==========================================
-echo CodeFree Desktop - Windows Build Script
+echo CodeFree Desktop - DEBUG Build
 echo ==========================================
 
 REM Check Python version
@@ -30,18 +31,17 @@ set "PLAYWRIGHT_BROWSERS_PATH=%cd%\playwright-browsers"
 if not exist "%PLAYWRIGHT_BROWSERS_PATH%" mkdir "%PLAYWRIGHT_BROWSERS_PATH%"
 python -m playwright install chromium
 
-REM Clean old build files (Windows only)
+REM Clean old build files
 echo.
 echo Cleaning old build files...
 if exist build rmdir /s /q build
 if exist dist\CodeFree*.exe del /q "dist\CodeFree*.exe"
 if exist "CodeFree Desktop.spec" del /q "CodeFree Desktop.spec"
 
-REM Package with PyInstaller (include Playwright browsers)
+REM Package with PyInstaller (DEBUG: with console window)
 echo.
-echo Starting packaging...
-python -m PyInstaller --name="CodeFree Desktop" ^
-    --windowed ^
+echo Starting packaging (DEBUG MODE - with console)...
+python -m PyInstaller --name="CodeFree Desktop Debug" ^
     --onefile ^
     --add-data="websocket_simulator2_0.py;." ^
     --add-data="srd_tool.jpg;." ^
@@ -68,18 +68,16 @@ if errorlevel 1 (
 
 echo.
 echo ==========================================
-echo Build Complete!
+echo DEBUG Build Complete!
 echo ==========================================
 echo.
-echo Application location: dist\CodeFree Desktop.exe
-echo Size: Approximately 250-300 MB (includes Chromium browser)
+echo Application location: dist\CodeFree Desktop Debug.exe
+echo.
+echo This is a DEBUG version with console output.
+echo You will see error messages if something goes wrong.
 echo.
 echo Usage:
-echo 1. Double-click 'dist\CodeFree Desktop.exe' to run
-echo.
-echo Note:
-echo - Windows Defender may show a warning on first run
-echo - Click "More info" then "Run anyway" to continue
-echo - First launch may take 10-20 seconds to initialize
+echo 1. Run from command line: cd dist ^&^& "CodeFree Desktop Debug.exe"
+echo 2. Or double-click - a console window will appear
 echo.
 pause

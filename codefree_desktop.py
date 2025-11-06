@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
 import asyncio
 import threading
+import subprocess
 import sys
 import os
 
@@ -15,6 +16,99 @@ import os
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
+
+
+def resource_path(*parts):
+    """在开发和 PyInstaller 运行环境下获取资源文件路径"""
+    base_path = getattr(sys, '_MEIPASS', current_dir)
+    return os.path.join(base_path, *parts)
+
+
+def _detect_chromium_dir(base_dir):
+    if not os.path.isdir(base_dir):
+        return None
+    for name in os.listdir(base_dir):
+        if name.startswith('chromium-'):
+            full_path = os.path.join(base_dir, name)
+            if os.path.isdir(full_path):
+                return base_dir
+    return None
+
+
+def ensure_playwright_browser():
+    """保证 Playwright 浏览器可用，优先使用随应用打包的版本"""
+    try:
+        # Windows 和 macOS 使用不同的目录名
+        bundled_candidates = [
+            resource_path('playwright-browsers'),
+            resource_path('playwright-browsers-windows'),  # Windows 构建
+            resource_path('playwright', 'driver', 'package')
+        ]
+
+        for candidate in bundled_candidates:
+            try:
+                detected = _detect_chromium_dir(candidate)
+                if detected:
+                    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = detected
+                    print(f"✅ 找到打包的 Chromium 浏览器: {detected}")
+                    return detected
+            except Exception:
+                continue
+
+        home_cache = os.path.join(os.path.expanduser('~'), '.srd_tool', 'playwright-browsers')
+        try:
+            detected = _detect_chromium_dir(home_cache)
+            if detected:
+                os.environ['PLAYWRIGHT_BROWSERS_PATH'] = detected
+                print(f"✅ 使用缓存的 Chromium 浏览器: {detected}")
+                return detected
+        except Exception:
+            pass
+
+        # 不在启动时自动下载，让用户手动触发
+        print("\n⚠️  未找到 Playwright Chromium 浏览器")
+        print("将在首次运行模拟器时自动下载...\n")
+        return None
+    except Exception as e:
+        print(f"⚠️ 浏览器检测异常: {e}")
+        return None
+
+
+# 延迟初始化，不阻塞 GUI 启动，添加超时保护
+def safe_init_browser():
+    """安全的浏览器初始化，带超时保护"""
+    try:
+        import signal
+
+        # 设置超时（仅限 Unix 系统）
+        if hasattr(signal, 'SIGALRM'):
+            def timeout_handler(signum, frame):
+                raise TimeoutError("浏览器初始化超时")
+
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(5)  # 5 秒超时
+
+        result = ensure_playwright_browser()
+
+        if hasattr(signal, 'SIGALRM'):
+            signal.alarm(0)  # 取消超时
+
+        return result
+    except TimeoutError:
+        print("⚠️ 浏览器初始化超时，跳过")
+        return None
+    except Exception as e:
+        print(f"⚠️ 浏览器初始化失败: {e}")
+        return None
+
+# Windows 不支持 SIGALRM，直接调用
+if sys.platform == 'win32':
+    try:
+        ensure_playwright_browser()
+    except Exception as e:
+        print(f"⚠️ 浏览器初始化警告: {e}")
+else:
+    safe_init_browser()
 
 from websocket_simulator2_0 import (
     CredentialManager,
@@ -72,6 +166,9 @@ class CodeFreeDesktop:
         # 共享凭证变量
         self.invoker_var = tk.StringVar(value=credential_manager.invoker_id or "")
         self.session_var = tk.StringVar(value=credential_manager.session_id or "")
+        self.credentials_notice_flag = False
+        self.icon_image = None
+        self.apply_app_icon()
 
         # 配置样式
         self.setup_styles()
@@ -205,9 +302,9 @@ class CodeFreeDesktop:
         logo_frame.pack(fill=tk.X, padx=20)
         logo_frame.pack_propagate(False)
 
-        tk.Label(logo_frame, text="CodeFree", font=('Helvetica', 20, 'bold'),
+        tk.Label(logo_frame, text="SRD&TOOL", font=('Helvetica', 20, 'bold'),
                  bg=COLORS['sidebar'], fg=COLORS['primary']).pack(anchor='w', pady=(24, 0))
-        tk.Label(logo_frame, text="Desktop Companion", font=('Helvetica', 10),
+        tk.Label(logo_frame, text="Desktop", font=('Helvetica', 10),
                  bg=COLORS['sidebar'], fg=COLORS['text_secondary']).pack(anchor='w', pady=(4, 0))
 
         tk.Frame(sidebar, bg=COLORS['border'], height=1).pack(fill=tk.X, padx=20, pady=16)
@@ -393,9 +490,41 @@ class CodeFreeDesktop:
                  font=('Helvetica', 10), bg=COLORS['bg'],
                  fg=COLORS['text_secondary']).pack(anchor='w', pady=(6, 0))
 
-        # 内容容器
-        container = tk.Frame(page, bg=COLORS['bg'])
-        container.grid(row=1, column=0, sticky='nsew', padx=20, pady=(0, 20))
+        # 创建带滚动条的Canvas容器
+        canvas_frame = tk.Frame(page, bg=COLORS['bg'])
+        canvas_frame.grid(row=1, column=0, sticky='nsew', padx=20, pady=(0, 20))
+        canvas_frame.grid_rowconfigure(0, weight=1)
+        canvas_frame.grid_columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(canvas_frame, bg=COLORS['bg'], highlightthickness=0)
+        scrollbar = tk.Scrollbar(canvas_frame, orient='vertical', command=canvas.yview)
+
+        # 内容容器（放在canvas内）
+        container = tk.Frame(canvas, bg=COLORS['bg'])
+
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.grid(row=0, column=1, sticky='ns')
+        canvas.grid(row=0, column=0, sticky='nsew')
+
+        canvas_window = canvas.create_window((0, 0), window=container, anchor='nw')
+
+        # 更新滚动区域
+        def update_scroll_region(event=None):
+            canvas.configure(scrollregion=canvas.bbox('all'))
+            # 让内容宽度填充canvas
+            canvas_width = canvas.winfo_width()
+            if canvas_width > 1:
+                canvas.itemconfig(canvas_window, width=canvas_width)
+
+        container.bind('<Configure>', update_scroll_region)
+        canvas.bind('<Configure>', update_scroll_region)
+
+        # 鼠标滚轮支持
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+
+        canvas.bind_all('<MouseWheel>', on_mousewheel)  # Windows/macOS
 
         # 配置容器的响应式
         container.grid_rowconfigure(0, weight=0)
@@ -477,9 +606,41 @@ class CodeFreeDesktop:
                  font=('Helvetica', 10), bg=COLORS['bg'],
                  fg=COLORS['text_secondary']).pack(anchor='w', pady=(6, 0))
 
-        # 内容
-        container = tk.Frame(page, bg=COLORS['bg'])
-        container.grid(row=1, column=0, sticky='nsew', padx=20, pady=(0, 20))
+        # 创建带滚动条的Canvas容器
+        canvas_frame = tk.Frame(page, bg=COLORS['bg'])
+        canvas_frame.grid(row=1, column=0, sticky='nsew', padx=20, pady=(0, 20))
+        canvas_frame.grid_rowconfigure(0, weight=1)
+        canvas_frame.grid_columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(canvas_frame, bg=COLORS['bg'], highlightthickness=0)
+        scrollbar = tk.Scrollbar(canvas_frame, orient='vertical', command=canvas.yview)
+
+        # 内容容器（放在canvas内）
+        container = tk.Frame(canvas, bg=COLORS['bg'])
+
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.grid(row=0, column=1, sticky='ns')
+        canvas.grid(row=0, column=0, sticky='nsew')
+
+        canvas_window = canvas.create_window((0, 0), window=container, anchor='nw')
+
+        # 更新滚动区域
+        def update_scroll_region(event=None):
+            canvas.configure(scrollregion=canvas.bbox('all'))
+            canvas_width = canvas.winfo_width()
+            if canvas_width > 1:
+                canvas.itemconfig(canvas_window, width=canvas_width)
+
+        container.bind('<Configure>', update_scroll_region)
+        canvas.bind('<Configure>', update_scroll_region)
+
+        # 鼠标滚轮支持
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+
+        canvas.bind_all('<MouseWheel>', on_mousewheel)
+
         container.grid_rowconfigure(0, weight=0)
         container.grid_rowconfigure(1, weight=0)
         container.grid_columnconfigure(0, weight=1)
@@ -547,8 +708,38 @@ class CodeFreeDesktop:
                  font=('Helvetica', 10), bg=COLORS['bg'],
                  fg=COLORS['text_secondary']).pack(anchor='w', pady=(6, 0))
 
-        container = tk.Frame(page, bg=COLORS['bg'])
-        container.grid(row=1, column=0, sticky='nsew', padx=20, pady=(0, 20))
+        # 创建带滚动条的Canvas容器
+        canvas_frame = tk.Frame(page, bg=COLORS['bg'])
+        canvas_frame.grid(row=1, column=0, sticky='nsew', padx=20, pady=(0, 20))
+        canvas_frame.grid_rowconfigure(0, weight=1)
+        canvas_frame.grid_columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(canvas_frame, bg=COLORS['bg'], highlightthickness=0)
+        scrollbar = tk.Scrollbar(canvas_frame, orient='vertical', command=canvas.yview)
+
+        container = tk.Frame(canvas, bg=COLORS['bg'])
+
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.grid(row=0, column=1, sticky='ns')
+        canvas.grid(row=0, column=0, sticky='nsew')
+
+        canvas_window = canvas.create_window((0, 0), window=container, anchor='nw')
+
+        def update_scroll_region(event=None):
+            canvas.configure(scrollregion=canvas.bbox('all'))
+            canvas_width = canvas.winfo_width()
+            if canvas_width > 1:
+                canvas.itemconfig(canvas_window, width=canvas_width)
+
+        container.bind('<Configure>', update_scroll_region)
+        canvas.bind('<Configure>', update_scroll_region)
+
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+
+        canvas.bind_all('<MouseWheel>', on_mousewheel)
+
         container.grid_columnconfigure(0, weight=1)
 
         card = self.create_card(container, "CodeFree Desktop v1.0")
@@ -573,6 +764,28 @@ class CodeFreeDesktop:
 
         tk.Label(card.body, text=info, justify=tk.LEFT, font=('Helvetica', 10),
                 bg=COLORS['bg_secondary'], fg=COLORS['text_secondary']).pack(pady=10)
+
+    def apply_app_icon(self):
+        """设置应用图标"""
+        icon_path = resource_path('srd_tool.jpg')
+        if not os.path.exists(icon_path):
+            print(f"⚠️ 未找到应用图标文件: {icon_path}")
+            return
+
+        icon_photo = None
+        try:
+            from PIL import Image, ImageTk  # type: ignore
+            image = Image.open(icon_path)
+            icon_photo = ImageTk.PhotoImage(image)
+        except Exception as pil_error:
+            try:
+                icon_photo = tk.PhotoImage(file=icon_path)
+            except Exception as tk_error:
+                print(f"⚠️ 无法设置应用图标: {pil_error or tk_error}")
+                return
+
+        self.icon_image = icon_photo
+        self.root.iconphoto(True, self.icon_image)
 
     def create_card(self, parent, title):
         """创建卡片"""
@@ -618,6 +831,21 @@ class CodeFreeDesktop:
         ttk.Button(parent, text="保存凭证", command=self.save_credentials,
                    style='Primary.TButton', width=12).pack(anchor='w')
 
+    def handle_credentials_invalid(self, ensure_clear=False):
+        """凭证失效时清空并提示"""
+        if ensure_clear:
+            credential_manager.clear_credentials()
+
+        self.invoker_var.set("")
+        self.session_var.set("")
+
+        if not self.credentials_notice_flag:
+            print("\n⚠️ 凭证失效，请重新获取或手动填写后再试。\n")
+        self.credentials_notice_flag = True
+
+    def reset_credentials_notice(self):
+        self.credentials_notice_flag = False
+
     def clear_console(self):
         self.console.delete(1.0, tk.END)
         print("控制台已清空\n")
@@ -647,6 +875,7 @@ class CodeFreeDesktop:
                 self.root.after(0, lambda: self.invoker_var.set(invoker_id))
                 self.root.after(0, lambda: self.session_var.set(session_id))
                 credential_manager.set_credentials(invoker_id, session_id)
+                self.root.after(0, self.reset_credentials_notice)
                 self.root.after(0, lambda: messagebox.showinfo("成功", "凭证已自动提取！"))
             else:
                 self.root.after(0, lambda: messagebox.showerror("失败", "未能获取凭证"))
@@ -662,7 +891,10 @@ class CodeFreeDesktop:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             manager = SemiAutoLoginManager()
-            result = loop.run_until_complete(manager.semi_auto_login(keep_open=True))
+            # Git模式：不使用现有凭证，让用户正常登录后再导航到仓库页面
+            result = loop.run_until_complete(
+                manager.semi_auto_login(keep_open=True)
+            )
 
             if result:
                 invoker_id, session_id, git_params = result
@@ -678,6 +910,7 @@ class CodeFreeDesktop:
                 credential_manager.set_credentials(invoker_id, session_id)
                 if git_params:
                     credential_manager.set_git_params(git_params.get('project_id'), git_params.get('repository_id'))
+                self.root.after(0, self.reset_credentials_notice)
                 self.root.after(0, lambda: messagebox.showinfo("成功", "凭证已自动提取！"))
             else:
                 self.root.after(0, lambda: messagebox.showerror("失败", "未能获取凭证"))
@@ -704,6 +937,7 @@ class CodeFreeDesktop:
         self.invoker_var.set(invoker_id)
         self.session_var.set(session_id)
         credential_manager.set_credentials(invoker_id, session_id)
+        self.reset_credentials_notice()
         messagebox.showinfo("成功", "凭证已保存")
 
     def start_coding(self):
@@ -733,6 +967,7 @@ class CodeFreeDesktop:
             messagebox.showwarning("警告", "代码补全最大 2000")
             max_tasks = 2000
 
+        self.reset_credentials_notice()
         self.is_running = True
         self.start_coding_btn.config(state=tk.DISABLED)
         self.stop_coding_btn.config(state=tk.NORMAL)
@@ -752,6 +987,11 @@ class CodeFreeDesktop:
                 print("\n✅ 完成\n")
             except Exception as e:
                 print(f"\n❌ 错误: {e}\n")
+                error_text = str(e).lower()
+                auth_keywords = ['401', 'unauthorized', '认证', '凭证', '未授权', 'expired']
+                if any(keyword in error_text for keyword in auth_keywords):
+                    credential_manager.clear_credentials()
+                    self.root.after(0, self.handle_credentials_invalid)
             finally:
                 loop.close()
                 self.root.after(0, self.task_completed)
@@ -776,6 +1016,12 @@ class CodeFreeDesktop:
             messagebox.showerror("错误", "次数必须是数字")
             return
 
+        if not credential_manager.has_credentials():
+            print("\n⚠️ 未检测到有效凭证，请在凭证设置中重新获取或手动填写。\n")
+            self.handle_credentials_invalid()
+            messagebox.showwarning("提示", "请先设置凭证")
+            return
+        self.reset_credentials_notice()
         self.is_running = True
         self.start_git_btn.config(state=tk.DISABLED)
         self.stop_git_btn.config(state=tk.NORMAL)
@@ -815,6 +1061,8 @@ class CodeFreeDesktop:
         self.stop_coding_btn.config(state=tk.DISABLED)
         self.start_git_btn.config(state=tk.NORMAL)
         self.stop_git_btn.config(state=tk.DISABLED)
+        if not credential_manager.has_credentials() and (self.invoker_var.get() or self.session_var.get()):
+            self.handle_credentials_invalid()
         self.update_status("就绪", False)
 
     class ConsoleRedirect:

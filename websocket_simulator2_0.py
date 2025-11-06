@@ -60,19 +60,30 @@ credential_manager = CredentialManager()
 class SemiAutoLoginManager:
     """半自动登录管理器"""
     
-    async def semi_auto_login(self, headless: bool = False, keep_open: bool = False) -> Optional[Tuple[str, str, Optional[Dict]]]:
+    async def semi_auto_login(self,
+                              headless: bool = False,
+                              keep_open: bool = False,
+                              start_url: Optional[str] = None,
+                              preset_credentials: Optional[Dict[str, str]] = None
+                              ) -> Optional[Tuple[str, str, Optional[Dict]]]:
         """
         半自动登录 - 浏览器打开，用户手动登录，脚本自动提取
 
         Args:
             headless: 是否无头模式（通常应为 False 以便用户操作）
             keep_open: 是否保持浏览器打开（用于Git提交模式）
+            start_url: 启动时访问的地址（默认登录页）
+            preset_credentials: 预置凭证，可在进入工作区前尝试复用
 
         Returns:
             (invoker_id, session_id, git_params) 或 None
             git_params: 如果导航到仓库页面，包含 {project_id, repository_id, file_path}
         """
+        target_url = start_url or 'https://www.srdcloud.cn/login'
+
         print("\n🌐 正在启动浏览器...")
+        if preset_credentials and preset_credentials.get('invoker_id') and preset_credentials.get('session_id'):
+            print("🔁 已注入现有凭证，尝试直接访问工作区。若被重定向到登录页，请按正常流程完成登录。")
         print("📱 请在浏览器中完成登录（包括短信验证码）")
         if keep_open:
             print("⚠️  登录后浏览器会保持打开")
@@ -87,8 +98,18 @@ class SemiAutoLoginManager:
                     headless=headless,
                     args=['--start-maximized']
                 )
+                extra_headers = {}
+                if preset_credentials:
+                    invoker = preset_credentials.get('invoker_id')
+                    session = preset_credentials.get('session_id')
+                    if invoker and session:
+                        extra_headers = {
+                            'userid': invoker,
+                            'sessionid': session
+                        }
                 context = await browser.new_context(
-                    viewport={'width': 1920, 'height': 1080}
+                    viewport={'width': 1920, 'height': 1080},
+                    extra_http_headers=extra_headers or None
                 )
                 page = await context.new_page()
                 
@@ -156,8 +177,8 @@ class SemiAutoLoginManager:
                 browser.on('disconnected', mark_browser_closed)
                 
                 # 打开登录页
-                print("🔗 正在打开登录页面...")
-                await page.goto('https://www.srdcloud.cn/login', wait_until='networkidle')
+                print(f"🔗 正在打开页面: {target_url}")
+                await page.goto(target_url, wait_until='networkidle')
                 
                 print("⏳ 等待登录完成...")
                 print("   提示: 登录后如果凭证未自动提取，请刷新页面或点击任意链接\n")
@@ -296,7 +317,7 @@ class CodeFreeSimulator:
     def _load_src_files(self):
         """加载源文件列表"""
         if not os.path.exists(self.src_dir):
-            print(f"[{self.invoker_id}] 警告: 源文件目录不存在: {self.src_dir}")
+            # 静默处理：src目录不存在时不输出警告，仅在实际使用时提示
             return
 
         # 支持多种代码文件扩展名
