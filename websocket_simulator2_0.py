@@ -31,11 +31,11 @@ class CredentialManager:
         print(f"   Invoker ID: {invoker_id}")
         print(f"   Session ID: {session_id[:30]}...")
 
-    def set_git_params(self, project_id: str = None, repository_id: str = None):
-        """设置Git参数"""
-        if project_id:
+    def set_git_params(self, project_id: Optional[str] = None, repository_id: Optional[str] = None):
+        """设置或清除 Git 参数"""
+        if project_id is not None:
             self.project_id = project_id
-        if repository_id:
+        if repository_id is not None:
             self.repository_id = repository_id
 
     def has_credentials(self) -> bool:
@@ -55,6 +55,30 @@ class CredentialManager:
 
 # 全局凭证管理器实例
 credential_manager = CredentialManager()
+
+
+def resolve_default_src_dir(custom_src: Optional[str] = None) -> str:
+    """
+    解析默认的源代码目录，支持 PyInstaller 打包后的路径。
+    """
+    if custom_src:
+        return custom_src
+
+    search_candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        search_candidates.append(os.path.join(meipass, "src"))
+
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+    search_candidates.append(os.path.join(module_dir, "src"))
+    search_candidates.append(os.path.join(os.getcwd(), "src"))
+
+    for candidate in search_candidates:
+        if candidate and os.path.isdir(candidate):
+            return candidate
+
+    # 没有找到现成目录，退回默认值，后续逻辑会提示缺失
+    return custom_src or "src"
 
 
 class SemiAutoLoginManager:
@@ -249,7 +273,7 @@ class SemiAutoLoginManager:
 class CodeFreeSimulator:
     def __init__(self, invoker_id: str, session_id: str, client_platform: str = "",
                  filename: str = "", max_completions: int = 2000, disable_ssl_verification: bool = True,
-                 mode: str = "completion", src_dir: str = "src"):
+                 mode: str = "completion", src_dir: Optional[str] = None):
         """
         初始化模拟器
 
@@ -277,7 +301,7 @@ class CodeFreeSimulator:
         self.start_time = None
         self.disable_ssl_verification = disable_ssl_verification
         self.mode = mode
-        self.src_dir = src_dir
+        self.src_dir = resolve_default_src_dir(src_dir)
         self.src_files: List[str] = []
 
         # 如果是注释模式，加载源文件列表
@@ -1048,7 +1072,7 @@ class SimulatorManager:
             return []
     
     async def run_simulator(self, invoker_id: str, session_id: str, max_completions: int = 2000,
-                          disable_ssl_verification: bool = True, mode: str = "completion", src_dir: str = "src"):
+                          disable_ssl_verification: bool = True, mode: str = "completion", src_dir: Optional[str] = None):
         """运行单个模拟器"""
         simulator = CodeFreeSimulator(
             invoker_id=invoker_id,
@@ -1056,7 +1080,7 @@ class SimulatorManager:
             max_completions=max_completions,
             disable_ssl_verification=disable_ssl_verification,
             mode=mode,
-            src_dir=src_dir
+            src_dir=resolve_default_src_dir(src_dir)
         )
         self.simulators.append(simulator)
 
@@ -1066,7 +1090,7 @@ class SimulatorManager:
             print(f"[{invoker_id}] 运行失败: {e}")
 
     async def run_batch(self, accounts: List[Dict[str, str]], max_completions: int = 2000,
-                      disable_ssl_verification: bool = True, mode: str = "completion", src_dir: str = "src"):
+                      disable_ssl_verification: bool = True, mode: str = "completion", src_dir: Optional[str] = None):
         """批量运行多个模拟器"""
         tasks = [
             self.run_simulator(acc['invoker_id'], acc['session_id'], max_completions, disable_ssl_verification, mode, src_dir)
@@ -1156,9 +1180,11 @@ async def semi_auto_mode():
     mode = "comment" if mode_choice == "2" else "completion"
 
     # 如果是注释模式，询问源文件目录
-    src_dir = "src"
+    default_src_dir = resolve_default_src_dir(None)
+    src_dir = default_src_dir
     if mode == "comment":
-        src_dir_input = input("请输入源文件目录路径 (默认: src): ").strip()
+        prompt_default = default_src_dir if default_src_dir != "src" else "src"
+        src_dir_input = input(f"请输入源文件目录路径 (默认: {prompt_default}): ").strip()
         if src_dir_input:
             src_dir = src_dir_input
 
@@ -1244,9 +1270,11 @@ async def manual_mode():
     mode = "comment" if mode_choice == "2" else "completion"
 
     # 如果是注释模式，询问源文件目录
-    src_dir = "src"
+    default_src_dir = resolve_default_src_dir(None)
+    src_dir = default_src_dir
     if mode == "comment":
-        src_dir_input = input("请输入源文件目录路径 (默认: src): ").strip()
+        prompt_default = default_src_dir if default_src_dir != "src" else "src"
+        src_dir_input = input(f"请输入源文件目录路径 (默认: {prompt_default}): ").strip()
         if src_dir_input:
             src_dir = src_dir_input
 
@@ -1321,9 +1349,11 @@ async def batch_mode():
     mode = "comment" if mode_choice == "2" else "completion"
 
     # 如果是注释模式，询问源文件目录
-    src_dir = "src"
+    default_src_dir = resolve_default_src_dir(None)
+    src_dir = default_src_dir
     if mode == "comment":
-        src_dir_input = input("请输入源文件目录路径 (默认: src): ").strip()
+        prompt_default = default_src_dir if default_src_dir != "src" else "src"
+        src_dir_input = input(f"请输入源文件目录路径 (默认: {prompt_default}): ").strip()
         if src_dir_input:
             src_dir = src_dir_input
 
@@ -1376,49 +1406,42 @@ async def git_commit_mode():
     session_id = None
     git_params = None
 
-    # 检查是否已有凭证
     if credential_manager.has_credentials():
-        print("💾 检测到当前会话已有凭证")
-        print(f"   Invoker ID: {credential_manager.invoker_id}")
-        print(f"   Session ID: {credential_manager.session_id[:30]}...")
-        use_existing = input("\n是否使用现有凭证? (y/n, 默认 y): ").strip().lower()
-        if use_existing != 'n':
-            invoker_id, session_id = credential_manager.get_credentials()
-            print("✅ 使用现有凭证")
-        else:
-            print("🔄 将重新获取凭证")
+        print("💾 检测到当前会话已有凭证。")
+        print("   为了捕获仓库信息，将重新打开登录流程。")
+        print("   如需跳过浏览器登录，可选择手动输入凭证。\n")
 
-    # 如果没有选择使用现有凭证，则获取新凭证
-    if not invoker_id or not session_id:
-        # 选择凭证获取方式
-        print("\n请选择凭证获取方式:")
-        print("  1. 半自动登录（推荐）")
-        print("  2. 手动输入凭证")
-        cred_choice = input("请输入选项 (1-2, 默认 1): ").strip()
+    credential_manager.set_git_params(None, None)
 
-        if cred_choice == "2":
-            # 手动输入
-            invoker_id = input("请输入 Invoker ID (User ID): ").strip()
-            session_id = input("请输入 Session ID: ").strip()
+    # 选择凭证获取方式
+    print("\n请选择凭证获取方式:")
+    print("  1. 半自动登录（推荐）")
+    print("  2. 手动输入凭证")
+    cred_choice = input("请输入选项 (1-2, 默认 1): ").strip()
 
-            if not invoker_id or not session_id:
-                print("❌ Invoker ID 和 Session ID 不能为空")
-                return
-        else:
-            # 半自动登录（Git模式：保持浏览器打开）
-            print("\n正在启动半自动登录...")
-            print("💡 登录后请导航到仓库页面，脚本会自动提取参数\n")
-            manager = SemiAutoLoginManager()
-            result = await manager.semi_auto_login(keep_open=True)
+    if cred_choice == "2":
+        # 手动输入
+        invoker_id = input("请输入 Invoker ID (User ID): ").strip()
+        session_id = input("请输入 Session ID: ").strip()
 
-            if not result:
-                print("\n❌ 未能获取凭证")
-                return
+        if not invoker_id or not session_id:
+            print("❌ Invoker ID 和 Session ID 不能为空")
+            return
+    else:
+        # 半自动登录（Git模式：保持浏览器打开）
+        print("\n正在启动半自动登录...")
+        print("💡 登录后请导航到仓库页面，脚本会自动提取参数\n")
+        manager = SemiAutoLoginManager()
+        result = await manager.semi_auto_login(keep_open=True)
 
-            invoker_id, session_id, git_params = result
-            print(f"\n✅ 凭证获取成功!")
-            print(f"   Invoker ID: {invoker_id}")
-            print(f"   Session ID: {session_id[:30]}...")
+        if not result:
+            print("\n❌ 未能获取凭证")
+            return
+
+        invoker_id, session_id, git_params = result
+        print(f"\n✅ 凭证获取成功!")
+        print(f"   Invoker ID: {invoker_id}")
+        print(f"   Session ID: {session_id[:30]}...")
 
         # 保存到全局凭证管理器
         credential_manager.set_credentials(invoker_id, session_id)

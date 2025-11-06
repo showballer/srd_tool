@@ -11,6 +11,8 @@ import threading
 import subprocess
 import sys
 import os
+import glob
+import shutil
 
 # 导入核心逻辑
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -35,18 +37,70 @@ def _detect_chromium_dir(base_dir):
     return None
 
 
+def _repair_playwright_bundle(base_dir):
+    """修复 PyInstaller 将 .app 重命名为 __dot__app 导致的路径问题"""
+    if not base_dir or not os.path.isdir(base_dir):
+        return
+
+    try:
+        chromium_dirs = glob.glob(os.path.join(base_dir, 'chromium-*', 'chrome-mac'))
+        for chrome_dir in chromium_dirs:
+            dot_app = os.path.join(chrome_dir, 'Chromium__dot__app')
+            real_app = os.path.join(chrome_dir, 'Chromium.app')
+            if os.path.isdir(dot_app) and not os.path.exists(real_app):
+                try:
+                    os.rename(dot_app, real_app)
+                    print(f"🔧 已恢复 Chromium.app 目录: {real_app}")
+                except OSError as rename_error:
+                    try:
+                        shutil.copytree(dot_app, real_app, dirs_exist_ok=True)
+                        print(f"🔧 已复制修复 Chromium.app 目录: {real_app}")
+                        try:
+                            shutil.rmtree(dot_app)
+                        except Exception:
+                            pass
+                    except Exception as copy_error:
+                        print(f"⚠️ 无法修复 Chromium.app 目录: {rename_error or copy_error}")
+    except Exception as repair_error:
+        print(f"⚠️ 修复 Playwright 浏览器路径时出错: {repair_error}")
+
+
 def ensure_playwright_browser():
     """保证 Playwright 浏览器可用，优先使用随应用打包的版本"""
     try:
-        # Windows 和 macOS 使用不同的目录名
-        bundled_candidates = [
-            resource_path('playwright-browsers'),
-            resource_path('playwright-browsers-windows'),  # Windows 构建
-            resource_path('playwright', 'driver', 'package')
-        ]
+        candidates = []
+        seen = set()
 
-        for candidate in bundled_candidates:
+        def add_candidate(path: str):
+            if not path:
+                return
+            normalized = os.path.abspath(path)
+            if normalized not in seen:
+                seen.add(normalized)
+                candidates.append(normalized)
+
+        # 1. 现有环境变量（如果外部已经指定则优先使用）
+        env_path = os.environ.get('PLAYWRIGHT_BROWSERS_PATH')
+        if env_path:
+            add_candidate(env_path)
+
+        # 2. 开发环境及 PyInstaller _MEIPASS 路径
+        add_candidate(resource_path('playwright-browsers'))
+        add_candidate(resource_path('playwright-browsers-windows'))  # Windows 构建
+        add_candidate(os.path.join(current_dir, 'playwright-browsers'))
+
+        # 3. macOS .app 目录结构 (Contents/MacOS -> Contents/Resources)
+        if getattr(sys, 'frozen', False):
+            exe_dir = os.path.dirname(sys.executable)
+            add_candidate(os.path.join(exe_dir, 'playwright-browsers'))
+            add_candidate(os.path.join(os.path.dirname(exe_dir), 'Resources', 'playwright-browsers'))
+            meipass = getattr(sys, '_MEIPASS', '')
+            if meipass:
+                add_candidate(os.path.join(meipass, 'playwright-browsers'))
+
+        for candidate in candidates:
             try:
+                _repair_playwright_bundle(candidate)
                 detected = _detect_chromium_dir(candidate)
                 if detected:
                     os.environ['PLAYWRIGHT_BROWSERS_PATH'] = detected
@@ -116,7 +170,8 @@ from websocket_simulator2_0 import (
     CodeFreeSimulator,
     GitCommitSimulator,
     SimulatorManager,
-    credential_manager
+    credential_manager,
+    resolve_default_src_dir
 )
 
 # 配色
@@ -522,9 +577,19 @@ class CodeFreeDesktop:
 
         # 鼠标滚轮支持
         def on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+            delta = event.delta
+            if delta == 0:
+                return
+            steps = int(-delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
+            canvas.yview_scroll(steps, 'units')
+
+        def on_mousewheel_linux(event):
+            direction = -1 if event.num == 4 else 1
+            canvas.yview_scroll(direction, 'units')
 
         canvas.bind_all('<MouseWheel>', on_mousewheel)  # Windows/macOS
+        canvas.bind_all('<Button-4>', on_mousewheel_linux)  # Linux scroll up
+        canvas.bind_all('<Button-5>', on_mousewheel_linux)  # Linux scroll down
 
         # 配置容器的响应式
         container.grid_rowconfigure(0, weight=0)
@@ -886,12 +951,15 @@ class CodeFreeDesktop:
 
     def semi_auto_login_git(self):
         print("\n启动半自动登录（Git 模式）...\n")
+        if credential_manager.has_credentials():
+            print("💾 检测到当前会话已保存凭证，为了捕获仓库信息将重新登录。\n")
 
         def login_task():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             manager = SemiAutoLoginManager()
             # Git模式：不使用现有凭证，让用户正常登录后再导航到仓库页面
+            credential_manager.set_git_params(None, None)
             result = loop.run_until_complete(
                 manager.semi_auto_login(keep_open=True)
             )
@@ -979,10 +1047,11 @@ class CodeFreeDesktop:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             manager = SimulatorManager()
+            src_dir = resolve_default_src_dir(None)
 
             try:
                 loop.run_until_complete(
-                    manager.run_simulator(invoker_id, session_id, max_tasks, True, mode, "src")
+                    manager.run_simulator(invoker_id, session_id, max_tasks, True, mode, src_dir)
                 )
                 print("\n✅ 完成\n")
             except Exception as e:

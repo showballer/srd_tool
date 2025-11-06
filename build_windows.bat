@@ -43,9 +43,11 @@ echo Starting packaging...
 python -m PyInstaller --name="CodeFree Desktop" ^
     --windowed ^
     --onefile ^
+    --icon="srd_tool.ico" ^
     --add-data="websocket_simulator2_0.py;." ^
     --add-data="srd_tool.jpg;." ^
     --add-data="playwright-browsers;playwright-browsers" ^
+    --add-data="src;src" ^
     --hidden-import=websockets ^
     --hidden-import=playwright ^
     --hidden-import=playwright.sync_api ^

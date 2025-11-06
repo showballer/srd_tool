@@ -8,26 +8,37 @@ echo "=========================================="
 # 检查 Python 版本
 echo ""
 echo "检查 Python 环境..."
-python3 --version
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
+if [ -z "$PYTHON_BIN" ]; then
+    PYTHON_BIN="$(command -v python)"
+fi
+
+if [ -z "$PYTHON_BIN" ]; then
+    echo "❌ 未找到可用的 Python 解释器，请先安装 Python 3.9+"
+    exit 1
+fi
+
+echo "使用 Python: $PYTHON_BIN"
+"$PYTHON_BIN" --version
 
 # 安装依赖
 echo ""
 echo "安装依赖..."
-python3 -m pip install --upgrade pip
-python3 -m pip install -r requirements.txt
-python3 -m pip install pyinstaller
+"$PYTHON_BIN" -m pip install --upgrade pip
+"$PYTHON_BIN" -m pip install -r requirements.txt
+"$PYTHON_BIN" -m pip install pyinstaller
 
 # 安装 Playwright 浏览器
 echo ""
 echo "安装 Playwright Chromium（离线目录 playwright-browsers）..."
 export PLAYWRIGHT_BROWSERS_PATH="$(pwd)/playwright-browsers"
 mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
-python3 -m playwright install chromium
+"$PYTHON_BIN" -m playwright install chromium
 
 # 清理旧的构建
 echo ""
 echo "清理旧的构建文件..."
-rm -rf build dist *.spec
+rm -rf build dist "CodeFree Desktop.spec"
 
 # 使用 PyInstaller 打包
 echo ""
@@ -50,22 +61,16 @@ fi
 
 echo "✅ 找到 Chromium 浏览器，继续打包..."
 
-python3 -m PyInstaller --name="CodeFree Desktop" \
-    --windowed \
-    --onedir \
-    --add-data="websocket_simulator2_0.py:." \
-    --add-data="srd_tool.jpg:." \
-    --add-data="playwright-browsers:playwright-browsers" \
-    --hidden-import=websockets \
-    --hidden-import=playwright \
-    --hidden-import=requests \
-    --hidden-import=urllib3 \
-    --hidden-import=tkinter \
-    --hidden-import=asyncio \
-    --collect-all playwright \
-    --noconfirm \
-    --codesign-identity="-" \
-    codefree_desktop.py
+"$PYTHON_BIN" -m PyInstaller --clean --noconfirm "CodeFree Desktop Custom.spec"
+
+# PyInstaller 会过滤部分浏览器可执行文件，这里强制同步原始目录
+APP_BROWSER_DIR="dist/CodeFree Desktop.app/Contents/Frameworks/playwright-browsers"
+if [ -d "$APP_BROWSER_DIR" ]; then
+    echo ""
+    echo "同步 Playwright 浏览器资源..."
+    mkdir -p "$APP_BROWSER_DIR"
+    rsync -a --delete "playwright-browsers/" "$APP_BROWSER_DIR/"
+fi
 
 echo ""
 echo "=========================================="
