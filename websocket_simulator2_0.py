@@ -81,6 +81,28 @@ def resolve_default_src_dir(custom_src: Optional[str] = None) -> str:
     return custom_src or "src"
 
 
+def prompt_yes_no(message: str, default: bool = True) -> bool:
+    """
+    安全地获取是/否输入。在 GUI 或无控制台环境下自动返回默认值。
+    """
+    try:
+        if sys.stdin and sys.stdin.isatty():
+            while True:
+                raw = input(message).strip().lower()
+                if raw in ("y", "yes"):
+                    return True
+                if raw in ("n", "no"):
+                    return False
+                if raw == "":
+                    return default
+                print("请输入 y 或 n。")
+    except Exception:
+        pass
+
+    print(f"\nℹ️ 自动选择{'是' if default else '否'}: {message}")
+    return default
+
+
 class SemiAutoLoginManager:
     """半自动登录管理器"""
     
@@ -118,10 +140,17 @@ class SemiAutoLoginManager:
         
         try:
             async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=headless,
-                    args=['--start-maximized']
-                )
+                launch_kwargs: Dict[str, Any] = {
+                    'headless': headless,
+                    'args': ['--start-maximized']
+                }
+
+                executable_path = os.environ.get('PLAYWRIGHT_CHROMIUM_EXECUTABLE')
+                if executable_path and os.path.exists(executable_path):
+                    launch_kwargs['executable_path'] = executable_path
+                    print(f"\n🖥️  使用系统 Chrome: {executable_path}")
+
+                browser = await p.chromium.launch(**launch_kwargs)
                 extra_headers = {}
                 if preset_credentials:
                     invoker = preset_credentials.get('invoker_id')
@@ -222,8 +251,7 @@ class SemiAutoLoginManager:
                             # Git模式：等待用户导航到仓库页面
                             if credentials.get('git_params') and credentials['git_params'].get('repository_id'):
                                 print("\n✅ 已检测到仓库页面！")
-                                user_confirm = input("是否使用检测到的参数？(y/n，输入n可继续等待): ").strip().lower()
-                                if user_confirm == 'y':
+                                if prompt_yes_no("是否使用检测到的参数？(y/n，输入n可继续等待): ", default=True):
                                     break
                             else:
                                 # 每10秒提示一次

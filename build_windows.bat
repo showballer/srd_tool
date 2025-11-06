@@ -19,16 +19,10 @@ REM Install dependencies
 echo.
 echo Installing dependencies...
 python -m pip install --upgrade pip
+set PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 pip install -r requirements.txt
 pip install playwright
 pip install pyinstaller
-
-REM Install Playwright browser (use unified directory name)
-echo.
-echo Installing Playwright Chromium...
-set "PLAYWRIGHT_BROWSERS_PATH=%cd%\playwright-browsers"
-if not exist "%PLAYWRIGHT_BROWSERS_PATH%" mkdir "%PLAYWRIGHT_BROWSERS_PATH%"
-python -m playwright install chromium
 
 REM Clean old build files (Windows only)
 echo.
@@ -46,7 +40,6 @@ python -m PyInstaller --name="CodeFree Desktop" ^
     --icon="srd_tool.ico" ^
     --add-data="websocket_simulator2_0.py;." ^
     --add-data="srd_tool.jpg;." ^
-    --add-data="playwright-browsers;playwright-browsers" ^
     --add-data="src;src" ^
     --hidden-import=websockets ^
     --hidden-import=playwright ^
@@ -74,7 +67,7 @@ echo Build Complete!
 echo ==========================================
 echo.
 echo Application location: dist\CodeFree Desktop.exe
-echo Size: Approximately 250-300 MB (includes Chromium browser)
+echo Size: Approximately 120-150 MB (uses system Chrome)
 echo.
 echo Usage:
 echo 1. Double-click 'dist\CodeFree Desktop.exe' to run
@@ -83,5 +76,6 @@ echo Note:
 echo - Windows Defender may show a warning on first run
 echo - Click "More info" then "Run anyway" to continue
 echo - First launch may take 10-20 seconds to initialize
+echo - Ensure Google Chrome is installed on the target machine
 echo.
 pause

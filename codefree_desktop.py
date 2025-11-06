@@ -65,9 +65,48 @@ def _repair_playwright_bundle(base_dir):
         print(f"⚠️ 修复 Playwright 浏览器路径时出错: {repair_error}")
 
 
+def find_system_chrome():
+    """尝试查找系统已安装的 Chrome 浏览器"""
+    candidates = []
+    if sys.platform == 'darwin':
+        candidates.extend([
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        ])
+    elif sys.platform.startswith('win'):
+        possible_dirs = [
+            os.environ.get('PROGRAMFILES', r"C:\Program Files"),
+            os.environ.get('PROGRAMFILES(X86)', r"C:\Program Files (x86)"),
+            os.environ.get('LOCALAPPDATA'),
+        ]
+        for base in possible_dirs:
+            if not base:
+                continue
+            candidates.append(os.path.join(base, "Google", "Chrome", "Application", "chrome.exe"))
+    else:
+        # Linux 或其他系统
+        for binary in ['google-chrome-stable', 'google-chrome', 'chromium', 'chromium-browser']:
+            path = shutil.which(binary)
+            if path:
+                candidates.append(path)
+
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def ensure_playwright_browser():
-    """保证 Playwright 浏览器可用，优先使用随应用打包的版本"""
+    """保证 Playwright 浏览器可用，优先使用系统浏览器"""
     try:
+        system_chrome = find_system_chrome()
+        if system_chrome:
+            os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '0'
+            os.environ['PLAYWRIGHT_CHROMIUM_EXECUTABLE'] = system_chrome
+            os.environ['PLAYWRIGHT_USE_SYSTEM_CHROME'] = '1'
+            print(f"✅ 检测到系统 Chrome 浏览器: {system_chrome}")
+            return {'mode': 'system', 'path': system_chrome}
+
         candidates = []
         seen = set()
 
@@ -105,6 +144,9 @@ def ensure_playwright_browser():
                 if detected:
                     os.environ['PLAYWRIGHT_BROWSERS_PATH'] = detected
                     print(f"✅ 找到打包的 Chromium 浏览器: {detected}")
+                    # 移除系统 Chrome 变量，确保 Playwright 使用内置版本
+                    os.environ.pop('PLAYWRIGHT_CHROMIUM_EXECUTABLE', None)
+                    os.environ.pop('PLAYWRIGHT_USE_SYSTEM_CHROME', None)
                     return detected
             except Exception:
                 continue
@@ -119,9 +161,11 @@ def ensure_playwright_browser():
         except Exception:
             pass
 
-        # 不在启动时自动下载，让用户手动触发
-        print("\n⚠️  未找到 Playwright Chromium 浏览器")
-        print("将在首次运行模拟器时自动下载...\n")
+        # 未找到任何可用浏览器
+        os.environ.pop('PLAYWRIGHT_CHROMIUM_EXECUTABLE', None)
+        os.environ.pop('PLAYWRIGHT_USE_SYSTEM_CHROME', None)
+        print("\n⚠️  未检测到系统 Chrome，也未找到打包的 Chromium 浏览器")
+        print("请安装最新版 Google Chrome 后重试，或在终端运行: playwright install chromium\n")
         return None
     except Exception as e:
         print(f"⚠️ 浏览器检测异常: {e}")
