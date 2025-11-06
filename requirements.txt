@@ -1,0 +1,20 @@
+# CodeFree Desktop Application 依赖包
+# 安装命令: pip install -r requirements.txt
+
+# GUI 框架（Python 内置）
+# tkinter is built-in
+
+# WebSocket 客户端库
+websockets>=11.0.0
+
+# HTTP 请求库
+requests>=2.28.0
+
+# 浏览器自动化库（用于半自动登录）
+playwright>=1.40.0
+
+# requests 的依赖（SSL 相关）
+urllib3>=1.26.0
+
+# 打包工具
+pyinstaller>=5.13.0
